@@ -1,0 +1,102 @@
+#include <Wire.h>
+#include <Adafruit_BMP085.h>   // BMP085/BMP180 library
+
+#define SLAVE_ADDRESS 0x04     // I2C slave cím (Raspberry oldalon i2cdetect -y 1)
+#define SIMULATE_SENSOR 0      // 1 = teszt random adatok, 0 = valódi szenzor
+
+Adafruit_BMP085 bmp;           // BMP180 objektum (I2C)
+
+// Globális változók
+volatile float lastTemp = 0.0;
+volatile float lastPressure = 0.0;   // hPa-ban
+char dataBuffer[32];                 // "25.50,1013.25" formátumhoz
+
+void setup() {
+  Serial.begin(9600);
+  
+  // I2C slave indítása
+  Wire.begin(SLAVE_ADDRESS);
+  Wire.onRequest(sendData);         // Raspberry kérésére fut le
+  
+  // BMP180 inicializálás
+  if (!bmp.begin()) {
+    Serial.println("BMP180 NEM található!");
+    Serial.println("Ellenőrizd:");
+    Serial.println(" - Bekötés: SDA → A4, SCL → A5");
+    Serial.println(" - Táp: 3.3–5V");
+    Serial.println(" - I2C cím: 0x77 (i2cdetect -y 1)");
+    // Itt folytathatod, de nem lesz valódi mérés
+  } else {
+    Serial.println("BMP180 sikeresen inicializálva (0x77)");
+  }
+
+  randomSeed(analogRead(0));
+  Serial.println("I2C BMP180 slave elindult...");
+  
+  if (SIMULATE_SENSOR == 1) {
+    Serial.println("FIGYELEM: SIMULATE_SENSOR aktív – random adatok mennek!");
+  }
+}
+
+void loop() {
+  if (SIMULATE_SENSOR == 1) {
+    // Teszt/random mód
+    lastTemp = random(1800, 3201) / 100.0;          // 18.00 .. 32.00 °C
+    lastPressure = random(9800, 10350) / 10.0;      // 980.0 .. 1035.0 hPa
+    
+    Serial.print("Szimulált: ");
+    Serial.print(lastTemp, 2);
+    Serial.print(" °C   ");
+    Serial.print(lastPressure, 2);
+    Serial.println(" hPa");
+  }
+  else {
+    // Valódi olvasás
+    float t = bmp.readTemperature();
+    float p = bmp.readPressure() / 100.0;   // Pa → hPa
+    
+    // Ellenőrzés: ésszerű értékek?
+    if (t > -40 && t < 85 && p > 300 && p < 1200) {
+      lastTemp = t;
+      lastPressure = p;
+      
+      Serial.print("BMP180: ");
+      Serial.print(lastTemp, 2);
+      Serial.print(" °C   ");
+      Serial.print(lastPressure, 2);
+      Serial.println(" hPa");
+    }
+    else {
+      // Hibás érték → fallback random
+      lastTemp = random(1800, 3201) / 100.0;
+      lastPressure = random(9800, 10350) / 10.0;
+      
+      Serial.println("Hiba: BMP180 olvasási hiba! → Fallback random:");
+      Serial.print("Temp: ");
+      Serial.print(lastTemp, 2);
+      Serial.print(" °C   Nyomás: ");
+      Serial.print(lastPressure, 2);
+      Serial.println(" hPa");
+    }
+  }
+  
+  delay(2000);   // BMP180 is kb. 2 mp-enként ajánlott frissíteni
+}
+
+// Raspberry Pi adat kérésekor fut
+void sendData() {
+  if (lastTemp == 0.0 && lastPressure == 0.0) {
+    Wire.write("0.00,0.00");
+    return;
+  }
+
+  char tStr[8];
+  char pStr[8];
+  dtostrf(lastTemp,    5, 2, tStr);     // pl. " 25.50"
+  dtostrf(lastPressure, 7, 2, pStr);    // pl. "1013.25"
+
+  memset(dataBuffer, 0, sizeof(dataBuffer));
+  sprintf(dataBuffer, "%s,%s", tStr, pStr);
+
+  Wire.write(dataBuffer);
+}
